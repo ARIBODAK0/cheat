@@ -9,6 +9,7 @@ on:
         description: 'Custom output name'
         required: false
         default: 'lib_auto_retri'
+        type: string
       optimization:
         description: 'Optimization level'
         required: false
@@ -29,14 +30,9 @@ jobs:
       - name: Checkout repository
         uses: actions/checkout@v4
 
-      - name: Create directory structure
+      - name: Create include directory and zygisk.hpp
         run: |
-          mkdir -p src
           mkdir -p include
-          mkdir -p output
-
-      - name: Create zygisk.hpp header
-        run: |
           cat > include/zygisk.hpp << 'EOF'
           #pragma once
           #include <jni.h>
@@ -60,10 +56,6 @@ jobs:
                   Api *api;
                   JNIEnv *env;
               };
-              
-              struct AppSpecializeArgs {
-                  void *nice_name;
-              };
           }
           
           #define REGISTER_ZYGISK_MODULE(className) \
@@ -73,12 +65,86 @@ jobs:
           
           echo "✅ zygisk.hpp created"
 
+      - name: Create src directory and auto_retri.cpp
+        run: |
+          mkdir -p src
+          
+          # Cek apakah file sudah ada
+          if [ ! -f "src/auto_retri.cpp" ]; then
+            echo "⚠️  src/auto_retri.cpp not found, creating dummy source..."
+            cat > src/auto_retri.cpp << 'EOF'
+          #include <android/log.h>
+          #include "zygisk.hpp"
+          
+          #define LOGI(...) __android_log_print(ANDROID_LOG_INFO, "AutoRetri", __VA_ARGS__)
+          
+          class AutoRetriModule : public zygisk::ModuleBase {
+          public:
+              void onLoad(zygisk::Api *api, JNIEnv *env) override {
+                  LOGI("Auto Retri Module v12.0 Loaded");
+                  LOGI("Educational Purpose Only");
+              }
+              
+              void preAppSpecialize(void *args) override {
+                  LOGI("preAppSpecialize called");
+              }
+              
+              void postAppSpecialize(const void *args) override {
+                  LOGI("postAppSpecialize called");
+              }
+          };
+          
+          REGISTER_ZYGISK_MODULE(AutoRetriModule)
+          EOF
+            echo "✅ Dummy source created"
+          else
+            echo "✅ Source file exists"
+            cat src/auto_retri.cpp | head -10
+          fi
+
       - name: Setup Android NDK
         uses: nttld/setup-ndk@v1
         with:
           ndk-version: ${{ env.NDK_VERSION }}
           add-to-path: true
           link-to-sdk: true
+
+      - name: Verify NDK and source file
+        run: |
+          echo "━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━"
+          echo "🔍 Verifying build environment..."
+          echo "━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━"
+          
+          # Check NDK
+          if [ -z "$ANDROID_NDK_HOME" ]; then
+            echo "❌ ANDROID_NDK_HOME is not set"
+            exit 1
+          fi
+          echo "✅ NDK_HOME: $ANDROID_NDK_HOME"
+          
+          # Check compiler
+          COMPILER_PATH="$ANDROID_NDK_HOME/toolchains/llvm/prebuilt/linux-x86_64/bin/aarch64-linux-android${{ env.API_LEVEL }}-clang++"
+          if [ ! -f "$COMPILER_PATH" ]; then
+            echo "❌ Compiler not found: $COMPILER_PATH"
+            exit 1
+          fi
+          echo "✅ Compiler found: $COMPILER_PATH"
+          
+          # Check source file
+          if [ ! -f "src/auto_retri.cpp" ]; then
+            echo "❌ src/auto_retri.cpp not found!"
+            ls -la src/ || echo "src directory is empty"
+            exit 1
+          fi
+          echo "✅ Source file exists: src/auto_retri.cpp"
+          echo "📄 Source size: $(wc -c < src/auto_retri.cpp) bytes"
+          
+          # Check include
+          if [ ! -f "include/zygisk.hpp" ]; then
+            echo "❌ include/zygisk.hpp not found!"
+            exit 1
+          fi
+          echo "✅ Header file exists: include/zygisk.hpp"
 
       - name: Compile to .so file
         run: |
@@ -88,39 +154,39 @@ jobs:
           
           INPUT_FILE="src/auto_retri.cpp"
           OUTPUT_NAME="${{ github.event.inputs.custom_name }}"
-          OUTPUT_FILE="output/${OUTPUT_NAME}.so"
+          if [ -z "$OUTPUT_NAME" ]; then
+            OUTPUT_NAME="lib_auto_retri"
+          fi
           OPT_LEVEL="${{ github.event.inputs.optimization }}"
-          
-          echo "━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━"
-          echo "📁 Compiler: $COMPILER"
-          echo "📁 Input: $INPUT_FILE"
-          echo "📁 Output: $OUTPUT_FILE"
-          echo "⚙️  Optimization: -$OPT_LEVEL"
-          echo "━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━"
-          
-          # Check if source exists
-          if [ ! -f "$INPUT_FILE" ]; then
-            echo "❌ Source file not found: $INPUT_FILE"
-            echo "Creating dummy source for testing..."
-            cat > "$INPUT_FILE" << 'DUMMY'
-          #include <android/log.h>
-          #include "zygisk.hpp"
-          
-          #define LOGI(...) __android_log_print(ANDROID_LOG_INFO, "AutoRetri", __VA_ARGS__)
-          
-          class AutoRetriModule : public zygisk::ModuleBase {
-          public:
-              void onLoad(zygisk::Api *api, JNIEnv *env) override {
-                  LOGI("Auto Retri Module Loaded");
-              }
-          };
-          
-          REGISTER_ZYGISK_MODULE(AutoRetriModule)
-          DUMMY
-            echo "✅ Dummy source created"
+          if [ -z "$OPT_LEVEL" ]; then
+            OPT_LEVEL="O2"
           fi
           
-          # Compile with include path
+          OUTPUT_FILE="output/${OUTPUT_NAME}.so"
+          
+          # Create output directory
+          mkdir -p output
+          
+          echo "━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━"
+          echo "🔨 Starting compilation..."
+          echo "━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━"
+          echo "📁 Compiler: $COMPILER"
+          echo "📁 Input file: $INPUT_FILE"
+          echo "📁 Output file: $OUTPUT_FILE"
+          echo "⚙️  Optimization: -$OPT_LEVEL"
+          echo "📁 Include path: -I./include"
+          echo "━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━"
+          
+          # Verify input file exists again
+          if [ ! -f "$INPUT_FILE" ]; then
+            echo "❌ ERROR: Input file $INPUT_FILE does NOT exist!"
+            echo "Contents of src directory:"
+            ls -la src/
+            exit 1
+          fi
+          
+          # Run compilation with explicit command
+          set -e
           $COMPILER \
             -std=c++17 \
             -$OPT_LEVEL \
@@ -131,16 +197,47 @@ jobs:
             "$INPUT_FILE" \
             -llog \
             -ldl \
-            -static-libstdc++ 2>&1
+            -static-libstdc++ \
+            -Wall \
+            -Wextra \
+            -Wno-unused-parameter
           
-          if [ $? -eq 0 ] && [ -f "$OUTPUT_FILE" ]; then
+          COMPILE_STATUS=$?
+          set +e
+          
+          if [ $COMPILE_STATUS -eq 0 ] && [ -f "$OUTPUT_FILE" ]; then
             echo "━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━"
             echo "✅ Compilation successful!"
+            echo "━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━"
             ls -lh "$OUTPUT_FILE"
             file "$OUTPUT_FILE"
-            echo "━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━"
           else
-            echo "❌ Compilation failed!"
+            echo "━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━"
+            echo "❌ Compilation failed with exit code: $COMPILE_STATUS"
+            echo "━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━"
+            exit 1
+          fi
+
+      - name: Verify output
+        run: |
+          echo "━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━"
+          echo "🔍 Verifying output..."
+          echo "━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━"
+          
+          OUTPUT_NAME="${{ github.event.inputs.custom_name }}"
+          if [ -z "$OUTPUT_NAME" ]; then
+            OUTPUT_NAME="lib_auto_retri"
+          fi
+          OUTPUT_FILE="output/${OUTPUT_NAME}.so"
+          
+          if [ -f "$OUTPUT_FILE" ]; then
+            echo "✅ Output file found"
+            echo "📦 File: $OUTPUT_FILE"
+            echo "📏 Size: $(du -h "$OUTPUT_FILE" | cut -f1)"
+            echo "🔖 Type: $(file "$OUTPUT_FILE" | cut -d: -f2)"
+          else
+            echo "❌ Output file not found!"
+            ls -la output/
             exit 1
           fi
 
