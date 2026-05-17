@@ -1,15 +1,10 @@
-name: Compile CPP to arm64-v8a.so
+name: Compile Auto Retri v12.0
 
 on:
   push:
     branches: [ main, master ]
   workflow_dispatch:
     inputs:
-      custom_name:
-        description: 'Custom output name'
-        required: false
-        default: 'lib_auto_retri'
-        type: string
       optimization:
         description: 'Optimization level'
         required: false
@@ -23,36 +18,64 @@ env:
 
 jobs:
   compile:
-    name: Compile for arm64-v8a
+    name: Compile Auto Retri Full v12.0
     runs-on: ubuntu-latest
     
     steps:
       - name: Checkout repository
         uses: actions/checkout@v4
 
-      - name: Create include directory and zygisk.hpp
+      - name: Create complete zygisk.hpp header
         run: |
           mkdir -p include
-          cat > include/zygisk.hpp << 'EOF'
+          cat > include/zygisk.hpp << 'ZYGISK_HEADER'
           #pragma once
           #include <jni.h>
+          #include <cstdint>
           
           namespace zygisk {
               enum class Option : int {
                   DLCLOSE_MODULE_LIBRARY = 0,
+                  FORCE_DENYLIST_ENFORCEMENT = 1,
+              };
+              
+              struct AppSpecializeArgs {
+                  void* nice_name;
+                  void* app_data_dir;
+                  void* se_info;
+                  void* se_info_len;
+                  void* runtime_flags;
+                  void* rlimits;
+                  void* app_component_name;
+              };
+              
+              struct ServerSpecializeArgs {
+                  void* uid;
+                  void* gid;
+                  void* gids;
+                  void* runtime_flags;
+                  void* rlimits;
               };
               
               class Api {
               public:
                   virtual void setOption(Option opt) = 0;
                   virtual void *getModule() = 0;
+                  virtual void *getNativeBridge() = 0;
+                  virtual void *getSym(const char *name) = 0;
+                  virtual void hookJniNativeMethods(const char *class_name, JNINativeMethod *methods, int num_methods) = 0;
+                  virtual void *getModuleBase() = 0;
+                  virtual void connectCompanion(int fd) = 0;
               };
               
               class ModuleBase {
               public:
                   virtual void onLoad(Api *api, JNIEnv *env) {}
-                  virtual void preAppSpecialize(void *args) {}
-                  virtual void postAppSpecialize(const void *args) {}
+                  virtual void preAppSpecialize(AppSpecializeArgs *args) {}
+                  virtual void postAppSpecialize(const AppSpecializeArgs *args) {}
+                  virtual void preServerSpecialize(ServerSpecializeArgs *args) {}
+                  virtual void postServerSpecialize(const ServerSpecializeArgs *args) {}
+                  
                   Api *api;
                   JNIEnv *env;
               };
@@ -61,46 +84,22 @@ jobs:
           #define REGISTER_ZYGISK_MODULE(className) \
               extern "C" __attribute__((visibility("default"))) \
               zygisk::ModuleBase *create_zygisk_module() { return new className(); }
-          EOF
+          ZYGISK_HEADER
           
-          echo "✅ zygisk.hpp created"
+          echo "✅ Complete zygisk.hpp created"
+          cat include/zygisk.hpp | head -20
 
-      - name: Create src directory and auto_retri.cpp
+      - name: Verify source file exists
         run: |
-          mkdir -p src
-          
-          # Cek apakah file sudah ada
           if [ ! -f "src/auto_retri.cpp" ]; then
-            echo "⚠️  src/auto_retri.cpp not found, creating dummy source..."
-            cat > src/auto_retri.cpp << 'EOF'
-          #include <android/log.h>
-          #include "zygisk.hpp"
-          
-          #define LOGI(...) __android_log_print(ANDROID_LOG_INFO, "AutoRetri", __VA_ARGS__)
-          
-          class AutoRetriModule : public zygisk::ModuleBase {
-          public:
-              void onLoad(zygisk::Api *api, JNIEnv *env) override {
-                  LOGI("Auto Retri Module v12.0 Loaded");
-                  LOGI("Educational Purpose Only");
-              }
-              
-              void preAppSpecialize(void *args) override {
-                  LOGI("preAppSpecialize called");
-              }
-              
-              void postAppSpecialize(const void *args) override {
-                  LOGI("postAppSpecialize called");
-              }
-          };
-          
-          REGISTER_ZYGISK_MODULE(AutoRetriModule)
-          EOF
-            echo "✅ Dummy source created"
-          else
-            echo "✅ Source file exists"
-            cat src/auto_retri.cpp | head -10
+            echo "❌ ERROR: src/auto_retri.cpp not found!"
+            echo "Please upload your Auto Retri v12.0 source code to src/auto_retri.cpp"
+            exit 1
           fi
+          echo "✅ Source file found: src/auto_retri.cpp"
+          echo "📄 File size: $(wc -c < src/auto_retri.cpp) bytes"
+          echo "📄 First 10 lines:"
+          head -10 src/auto_retri.cpp
 
       - name: Setup Android NDK
         uses: nttld/setup-ndk@v1
@@ -109,42 +108,29 @@ jobs:
           add-to-path: true
           link-to-sdk: true
 
-      - name: Verify NDK and source file
+      - name: Verify NDK compiler
         run: |
+          NDK_PATH="$ANDROID_NDK_HOME"
+          COMPILER="$NDK_PATH/toolchains/llvm/prebuilt/linux-x86_64/bin/aarch64-linux-android${{ env.API_LEVEL }}-clang++"
+          
           echo "━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━"
           echo "🔍 Verifying build environment..."
           echo "━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━"
           
-          # Check NDK
-          if [ -z "$ANDROID_NDK_HOME" ]; then
+          if [ -z "$NDK_PATH" ]; then
             echo "❌ ANDROID_NDK_HOME is not set"
             exit 1
           fi
-          echo "✅ NDK_HOME: $ANDROID_NDK_HOME"
+          echo "✅ NDK_HOME: $NDK_PATH"
           
-          # Check compiler
-          COMPILER_PATH="$ANDROID_NDK_HOME/toolchains/llvm/prebuilt/linux-x86_64/bin/aarch64-linux-android${{ env.API_LEVEL }}-clang++"
-          if [ ! -f "$COMPILER_PATH" ]; then
-            echo "❌ Compiler not found: $COMPILER_PATH"
+          if [ ! -f "$COMPILER" ]; then
+            echo "❌ Compiler not found: $COMPILER"
             exit 1
           fi
-          echo "✅ Compiler found: $COMPILER_PATH"
+          echo "✅ Compiler found: $COMPILER"
           
-          # Check source file
-          if [ ! -f "src/auto_retri.cpp" ]; then
-            echo "❌ src/auto_retri.cpp not found!"
-            ls -la src/ || echo "src directory is empty"
-            exit 1
-          fi
-          echo "✅ Source file exists: src/auto_retri.cpp"
-          echo "📄 Source size: $(wc -c < src/auto_retri.cpp) bytes"
-          
-          # Check include
-          if [ ! -f "include/zygisk.hpp" ]; then
-            echo "❌ include/zygisk.hpp not found!"
-            exit 1
-          fi
-          echo "✅ Header file exists: include/zygisk.hpp"
+          # Test compiler version
+          $COMPILER --version | head -3
 
       - name: Compile to .so file
         run: |
@@ -152,65 +138,55 @@ jobs:
           TOOLCHAIN="$NDK_PATH/toolchains/llvm/prebuilt/linux-x86_64"
           COMPILER="$TOOLCHAIN/bin/aarch64-linux-android${{ env.API_LEVEL }}-clang++"
           
-          INPUT_FILE="src/auto_retri.cpp"
-          OUTPUT_NAME="${{ github.event.inputs.custom_name }}"
-          if [ -z "$OUTPUT_NAME" ]; then
-            OUTPUT_NAME="lib_auto_retri"
-          fi
           OPT_LEVEL="${{ github.event.inputs.optimization }}"
           if [ -z "$OPT_LEVEL" ]; then
             OPT_LEVEL="O2"
           fi
           
-          OUTPUT_FILE="output/${OUTPUT_NAME}.so"
-          
-          # Create output directory
           mkdir -p output
           
           echo "━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━"
-          echo "🔨 Starting compilation..."
+          echo "🔨 Compiling Auto Retri v12.0..."
           echo "━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━"
           echo "📁 Compiler: $COMPILER"
-          echo "📁 Input file: $INPUT_FILE"
-          echo "📁 Output file: $OUTPUT_FILE"
+          echo "📁 Source: src/auto_retri.cpp"
+          echo "📁 Output: output/lib_auto_retri.so"
           echo "⚙️  Optimization: -$OPT_LEVEL"
-          echo "📁 Include path: -I./include"
+          echo "📁 Include: -I./include"
           echo "━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━"
           
-          # Verify input file exists again
-          if [ ! -f "$INPUT_FILE" ]; then
-            echo "❌ ERROR: Input file $INPUT_FILE does NOT exist!"
-            echo "Contents of src directory:"
-            ls -la src/
-            exit 1
-          fi
-          
-          # Run compilation with explicit command
-          set -e
+          # Compile
           $COMPILER \
             -std=c++17 \
             -$OPT_LEVEL \
             -fPIC \
             -shared \
             -I./include \
-            -o "$OUTPUT_FILE" \
-            "$INPUT_FILE" \
+            -o output/lib_auto_retri.so \
+            src/auto_retri.cpp \
             -llog \
             -ldl \
             -static-libstdc++ \
             -Wall \
             -Wextra \
-            -Wno-unused-parameter
+            -Wno-unused-parameter \
+            -Wno-missing-field-initializers \
+            -fvisibility=hidden \
+            -fvisibility-inlines-hidden
           
           COMPILE_STATUS=$?
-          set +e
           
-          if [ $COMPILE_STATUS -eq 0 ] && [ -f "$OUTPUT_FILE" ]; then
+          if [ $COMPILE_STATUS -eq 0 ] && [ -f "output/lib_auto_retri.so" ]; then
             echo "━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━"
             echo "✅ Compilation successful!"
             echo "━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━"
-            ls -lh "$OUTPUT_FILE"
-            file "$OUTPUT_FILE"
+            ls -lh output/lib_auto_retri.so
+            file output/lib_auto_retri.so
+            echo "━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━"
+            
+            # Check symbols
+            echo "🔍 Checking exported symbols:"
+            $TOOLCHAIN/bin/llvm-nm -C -D output/lib_auto_retri.so 2>/dev/null | grep " T " | head -10 || echo "No symbols found"
           else
             echo "━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━"
             echo "❌ Compilation failed with exit code: $COMPILE_STATUS"
@@ -218,32 +194,90 @@ jobs:
             exit 1
           fi
 
-      - name: Verify output
+      - name: Create Magisk module
         run: |
-          echo "━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━"
-          echo "🔍 Verifying output..."
-          echo "━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━"
+          mkdir -p magisk_module/zygisk
+          cp output/lib_auto_retri.so magisk_module/zygisk/arm64-v8a.so
           
-          OUTPUT_NAME="${{ github.event.inputs.custom_name }}"
-          if [ -z "$OUTPUT_NAME" ]; then
-            OUTPUT_NAME="lib_auto_retri"
-          fi
-          OUTPUT_FILE="output/${OUTPUT_NAME}.so"
+          cat > magisk_module/module.prop << 'EOF'
+          id=mlbb_auto_retri
+          name=MLBB Auto Retri
+          version=v12.0
+          versionCode=12
+          author=Auto Build
+          description=Auto last hit Lord & Turtle using Retribution. Full version with anti-ban features.
+          zygisk=true
+          EOF
           
-          if [ -f "$OUTPUT_FILE" ]; then
-            echo "✅ Output file found"
-            echo "📦 File: $OUTPUT_FILE"
-            echo "📏 Size: $(du -h "$OUTPUT_FILE" | cut -f1)"
-            echo "🔖 Type: $(file "$OUTPUT_FILE" | cut -d: -f2)"
-          else
-            echo "❌ Output file not found!"
-            ls -la output/
-            exit 1
-          fi
+          cat > magisk_module/customize.sh << 'EOF'
+          #!/system/bin/sh
+          ui_print "================================"
+          ui_print "  MLBB Auto Retri v12.0"
+          ui_print "  Lord & Turtle Auto Last Hit"
+          ui_print "================================"
+          ui_print "[✓] Module installed successfully"
+          ui_print "[✓] Enable Zygisk in Magisk"
+          ui_print "[✓] Do NOT add MLBB to DenyList"
+          ui_print "================================"
+          EOF
+          
+          chmod 755 magisk_module/customize.sh
+          
+          cd magisk_module
+          ZIP_NAME="mlbb-auto-retri-v12.0-$(date +'%Y%m%d-%H%M%S').zip"
+          zip -r "../output/$ZIP_NAME" ./*
+          cd ..
+          
+          echo "✅ Magisk module created: output/$ZIP_NAME"
+          ls -lh output/*.zip
 
-      - name: Upload artifact
+      - name: Generate build info
+        run: |
+          cat > output/build_info.txt << EOF
+          ========================================
+          Auto Retri v12.0 - Build Information
+          ========================================
+          Build Date: $(date -u +"%Y-%m-%d %H:%M:%S UTC")
+          Commit SHA: ${{ github.sha }}
+          Repository: ${{ github.repository }}
+          Branch: ${{ github.ref_name }}
+          Optimization: -${{ github.event.inputs.optimization || 'O2' }}
+          NDK Version: ${{ env.NDK_VERSION }}
+          API Level: ${{ env.API_LEVEL }}
+          Target: arm64-v8a
+          Features: Lord detection, Turtle detection, Distance check, Damage calculation
+          ========================================
+          EOF
+          
+          echo "✅ Build info saved"
+
+      - name: Upload .so library
         uses: actions/upload-artifact@v4
         with:
           name: arm64-v8a-library
-          path: output/*.so
+          path: output/lib_auto_retri.so
           retention-days: 90
+          compression-level: 9
+
+      - name: Upload Magisk module zip
+        uses: actions/upload-artifact@v4
+        with:
+          name: magisk-module
+          path: output/*.zip
+          retention-days: 90
+          compression-level: 9
+
+      - name: Upload build info
+        uses: actions/upload-artifact@v4
+        with:
+          name: build-info
+          path: output/build_info.txt
+          retention-days: 90
+
+  success-notification:
+    name: Send notification on success
+    needs: compile
+    runs-on: ubuntu-latest
+    if: always() && needs.compile.result == 'success'
+    steps:
+      - run: echo "✅ Auto Retri v12.0 compiled successfully!"
