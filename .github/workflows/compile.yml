@@ -1,4 +1,4 @@
-name: Compile Auto Retri v12.0
+Name: Compile Auto Retri v12.0 (Android 16 Optimized)
 
 on:
   push:
@@ -8,13 +8,13 @@ on:
       optimization:
         description: 'Optimization level'
         required: false
-        default: 'O2'
+        default: 'O3'  # Diubah ke O3 untuk performa game maksimal
         type: choice
         options: ['O0', 'O1', 'O2', 'O3', 'Os']
 
 env:
-  NDK_VERSION: r27c
-  API_LEVEL: 21
+  NDK_VERSION: r27c  # NDK stabil yang mendukung API tingkat tinggi
+  API_LEVEL: 36      # Diperbarui khusus untuk Android 16 (API 36)
 
 jobs:
   compile:
@@ -24,6 +24,11 @@ jobs:
     steps:
       - name: Checkout repository
         uses: actions/checkout@v4
+
+      - name: Install System Dependencies
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y zip coreutils
 
       - name: Create complete zygisk.hpp header
         run: |
@@ -86,20 +91,16 @@ jobs:
               zygisk::ModuleBase *create_zygisk_module() { return new className(); }
           ZYGISK_HEADER
           
-          echo "✅ Complete zygisk.hpp created"
-          cat include/zygisk.hpp | head -20
+          echo "✅ Complete zygisk.hpp created untuk Android 16"
 
       - name: Verify source file exists
         run: |
           if [ ! -f "src/auto_retri.cpp" ]; then
-            echo "❌ ERROR: src/auto_retri.cpp not found!"
-            echo "Please upload your Auto Retri v12.0 source code to src/auto_retri.cpp"
+            echo "❌ ERROR: src/auto_retri.cpp tidak ditemukan!"
+            echo "Silahkan upload source code kamu ke folder src/auto_retri.cpp"
             exit 1
           fi
-          echo "✅ Source file found: src/auto_retri.cpp"
-          echo "📄 File size: $(wc -c < src/auto_retri.cpp) bytes"
-          echo "📄 First 10 lines:"
-          head -10 src/auto_retri.cpp
+          echo "✅ Source file ditemukan: src/auto_retri.cpp"
 
       - name: Setup Android NDK
         uses: nttld/setup-ndk@v1
@@ -108,31 +109,19 @@ jobs:
           add-to-path: true
           link-to-sdk: true
 
-      - name: Verify NDK compiler
+      - name: Verify NDK compiler (ARM64-v8a)
         run: |
           NDK_PATH="$ANDROID_NDK_HOME"
           COMPILER="$NDK_PATH/toolchains/llvm/prebuilt/linux-x86_64/bin/aarch64-linux-android${{ env.API_LEVEL }}-clang++"
           
-          echo "━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━"
-          echo "🔍 Verifying build environment..."
-          echo "━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━"
-          
-          if [ -z "$NDK_PATH" ]; then
-            echo "❌ ANDROID_NDK_HOME is not set"
+          if [ -z "$NDK_PATH" ] || [ ! -f "$COMPILER" ]; then
+            echo "❌ Compiler untuk API ${{ env.API_LEVEL }} tidak ditemukan!"
             exit 1
           fi
-          echo "✅ NDK_HOME: $NDK_PATH"
-          
-          if [ ! -f "$COMPILER" ]; then
-            echo "❌ Compiler not found: $COMPILER"
-            exit 1
-          fi
-          echo "✅ Compiler found: $COMPILER"
-          
-          # Test compiler version
+          echo "✅ Compiler Android 16 siap digunakan:"
           $COMPILER --version | head -3
 
-      - name: Compile to .so file
+      - name: Compile to .so file (64-bit Modern)
         run: |
           NDK_PATH="$ANDROID_NDK_HOME"
           TOOLCHAIN="$NDK_PATH/toolchains/llvm/prebuilt/linux-x86_64"
@@ -140,24 +129,14 @@ jobs:
           
           OPT_LEVEL="${{ github.event.inputs.optimization }}"
           if [ -z "$OPT_LEVEL" ]; then
-            OPT_LEVEL="O2"
+            OPT_LEVEL="O3" # Default ke O3 untuk Android 16 agar eksekusi hit lebih instan
           fi
           
           mkdir -p output
           
-          echo "━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━"
-          echo "🔨 Compiling Auto Retri v12.0..."
-          echo "━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━"
-          echo "📁 Compiler: $COMPILER"
-          echo "📁 Source: src/auto_retri.cpp"
-          echo "📁 Output: output/lib_auto_retri.so"
-          echo "⚙️  Optimization: -$OPT_LEVEL"
-          echo "📁 Include: -I./include"
-          echo "━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━"
-          
-          # Compile
+          # Kompilasi dengan standar C++20 demi efisiensi memory di OS baru
           $COMPILER \
-            -std=c++17 \
+            -std=c++20 \
             -$OPT_LEVEL \
             -fPIC \
             -shared \
@@ -174,110 +153,66 @@ jobs:
             -fvisibility=hidden \
             -fvisibility-inlines-hidden
           
-          COMPILE_STATUS=$?
-          
-          if [ $COMPILE_STATUS -eq 0 ] && [ -f "output/lib_auto_retri.so" ]; then
-            echo "━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━"
-            echo "✅ Compilation successful!"
-            echo "━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━"
+          if [ $? -eq 0 ] && [ -f "output/lib_auto_retri.so" ]; then
+            echo "✅ Kompilasi Sukses untuk Android 16!"
             ls -lh output/lib_auto_retri.so
-            file output/lib_auto_retri.so
-            echo "━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━"
-            
-            # Check symbols
-            echo "🔍 Checking exported symbols:"
-            $TOOLCHAIN/bin/llvm-nm -C -D output/lib_auto_retri.so 2>/dev/null | grep " T " | head -10 || echo "No symbols found"
           else
-            echo "━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━"
-            echo "❌ Compilation failed with exit code: $COMPILE_STATUS"
-            echo "━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━"
+            echo "❌ Kompilasi Gagal!"
             exit 1
           fi
 
-      - name: Create Magisk module
+      - name: Create Magisk Module Zip
         run: |
           mkdir -p magisk_module/zygisk
           cp output/lib_auto_retri.so magisk_module/zygisk/arm64-v8a.so
           
           cat > magisk_module/module.prop << 'EOF'
           id=mlbb_auto_retri
-          name=MLBB Auto Retri
+          name=MLBB Auto Retri (Android 16 Ready)
           version=v12.0
-          versionCode=12
+          versionCode=120
           author=Auto Build
-          description=Auto last hit Lord & Turtle using Retribution. Full version with anti-ban features.
+          description=Auto last hit Lord & Turtle. Dioptimalkan untuk Android 16 (API 36) ARM64 Murni.
           zygisk=true
           EOF
           
           cat > magisk_module/customize.sh << 'EOF'
           #!/system/bin/sh
-          ui_print "================================"
-          ui_print "  MLBB Auto Retri v12.0"
-          ui_print "  Lord & Turtle Auto Last Hit"
-          ui_print "================================"
-          ui_print "[✓] Module installed successfully"
-          ui_print "[✓] Enable Zygisk in Magisk"
-          ui_print "[✓] Do NOT add MLBB to DenyList"
-          ui_print "================================"
+          ui_print "===================================="
+          ui_print "    MLBB Auto Retri v12.0           "
+          ui_print "    Optimized for Android 16        "
+          ui_print "===================================="
+          ui_print "[✓] Arsitektur: ARM64-v8a (64-bit)"
+          ui_print "[✓] Berhasil dipasang!"
+          ui_print "------------------------------------"
+          ui_print "⚠️  PERINGATAN UNTUK ANDROID 16:"
+          ui_print "Pastikan Zygisk aktif di Magisk/Kitsune."
+          ui_print "JANGAN masukkan MLBB ke DenyList bawaan."
+          ui_print "Disarankan gunakan HideMyApplist / Shamiko"
+          ui_print "===================================="
           EOF
           
           chmod 755 magisk_module/customize.sh
           
           cd magisk_module
-          ZIP_NAME="mlbb-auto-retri-v12.0-$(date +'%Y%m%d-%H%M%S').zip"
+          ZIP_NAME="mlbb-auto-retri-v12.0-A16-$(date +'%Y%m%d-%H%M%S').zip"
           zip -r "../output/$ZIP_NAME" ./*
           cd ..
-          
-          echo "✅ Magisk module created: output/$ZIP_NAME"
-          ls -lh output/*.zip
+          echo "✅ Modul Magisk sukses dibuat: output/$ZIP_NAME"
 
-      - name: Generate build info
-        run: |
-          cat > output/build_info.txt << EOF
-          ========================================
-          Auto Retri v12.0 - Build Information
-          ========================================
-          Build Date: $(date -u +"%Y-%m-%d %H:%M:%S UTC")
-          Commit SHA: ${{ github.sha }}
-          Repository: ${{ github.repository }}
-          Branch: ${{ github.ref_name }}
-          Optimization: -${{ github.event.inputs.optimization || 'O2' }}
-          NDK Version: ${{ env.NDK_VERSION }}
-          API Level: ${{ env.API_LEVEL }}
-          Target: arm64-v8a
-          Features: Lord detection, Turtle detection, Distance check, Damage calculation
-          ========================================
-          EOF
-          
-          echo "✅ Build info saved"
-
-      - name: Upload .so library
+      - name: Upload Artifacts
         uses: actions/upload-artifact@v4
         with:
-          name: arm64-v8a-library
-          path: output/lib_auto_retri.so
-          retention-days: 90
-          compression-level: 9
-
-      - name: Upload Magisk module zip
-        uses: actions/upload-artifact@v4
-        with:
-          name: magisk-module
-          path: output/*.zip
-          retention-days: 90
-          compression-level: 9
-
-      - name: Upload build info
-        uses: actions/upload-artifact@v4
-        with:
-          name: build-info
-          path: output/build_info.txt
+          name: Auto-Retri-v12.0-Android16
+          path: |
+            output/lib_auto_retri.so
+            output/*.zip
           retention-days: 90
 
   success-notification:
     name: Send notification on success
     needs: compile
     runs-on: ubuntu-latest
-    if: always() && needs.compile.result == 'success'
+    if: needs.compile.result == 'success'
     steps:
-      - run: echo "✅ Auto Retri v12.0 compiled successfully!"
+      - run: echo "✅ Auto Retri v12.0 sukses di-compile untuk Android 16!"
